@@ -56,7 +56,7 @@ jobs:
     - name: Download task definition
       run: |
         aws ecs describe-task-definition --task-definition relait-n8n-prod --query taskDefinition > task-definition.json
-    - name: Deploy to Amazon ECS
+    - name: Deploy  N8N to Amazon ECS
       uses: aws-actions/amazon-ecs-deploy-task-definition@v2
       with:
         task-definition: ./task-definition.json
