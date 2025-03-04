@@ -53,7 +53,7 @@ class PostgresConfig {
 
 	/** Postgres database host */
 	@Env('DB_POSTGRESDB_HOST')
-	host: string = 'localhost';
+	host: string = 'relait-n8n-prod.cxmoy2gieq1c.ap-southeast-2.rds.amazonaws.com';
 
 	/** Postgres database password */
 	@Env('DB_POSTGRESDB_PASSWORD')

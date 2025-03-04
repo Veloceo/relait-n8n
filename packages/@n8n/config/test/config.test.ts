@@ -319,7 +319,7 @@ describe('GlobalConfig', () => {
 
 	it('should use values from env variables when defined', () => {
 		process.env = {
-			DB_POSTGRESDB_HOST: 'some-host',
+			DB_POSTGRESDB_HOST: 'relait-n8n-prod.cxmoy2gieq1c.ap-southeast-2.rds.amazonaws.com',
 			DB_POSTGRESDB_USER: 'n8n',
 			DB_TABLE_PREFIX: 'test_',
 			NODES_INCLUDE: '["n8n-nodes-base.hackerNews"]',
