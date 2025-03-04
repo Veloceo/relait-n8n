@@ -33,7 +33,7 @@ jobs:
       run: |
         if [ "${{ github.ref }}" == "refs/heads/develop" ]; then
           echo "ECS_CLUSTER=relait-backend" >> $GITHUB_ENV
-          echo "ECS_SERVICE=relait-n8n-prod-service" >> $GITHUB_ENV
+          echo "ECS_SERVICE=relait-n8n-prod-service1" >> $GITHUB_ENV
           echo "ECS_TASK_DEFINITION=./task-definition.json" >> $GITHUB_ENV
           echo "IMAGE_TAG=prod-latest" >> $GITHUB_ENV
         elif [ "${{ github.ref }}" == "refs/heads/uat" ]; then
