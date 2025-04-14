@@ -29,6 +29,7 @@ const props = withDefaults(
 		inputData: INodeExecutionData[];
 		mappingEnabled?: boolean;
 		distanceFromActive: number;
+		outputIndex: number | undefined;
 		runIndex: number | undefined;
 		totalRuns: number | undefined;
 		search: string | undefined;
@@ -45,7 +46,6 @@ const telemetry = useTelemetry();
 
 const selectedJsonPath = ref(nonExistingJsonPath);
 const draggingPath = ref<null | string>(null);
-const displayMode = ref('json');
 const jsonDataContainer = ref(null);
 
 const { height } = useElementSize(jsonDataContainer);
@@ -72,15 +72,24 @@ const getJsonParameterPath = (path: string) => {
 	});
 };
 
-const onDragStart = (el: HTMLElement) => {
+const canDraggableDrop = computed(() => ndvStore.canDraggableDrop);
+const draggableStickyPosition = computed(() => ndvStore.draggableStickyPos);
+
+const onDragStart = (el: HTMLElement, data?: string) => {
 	if (el?.dataset.path) {
 		draggingPath.value = el.dataset.path;
 	}
 
+	ndvStore.draggableStartDragging({
+		type: 'mapping',
+		data: data ?? '',
+		dimensions: el?.getBoundingClientRect() ?? null,
+	});
 	ndvStore.resetMappingTelemetry();
 };
 
 const onDragEnd = (el: HTMLElement) => {
+	ndvStore.draggableStopDragging();
 	draggingPath.value = null;
 	const mappingTelemetry = ndvStore.mappingTelemetry;
 	const telemetryPayload = {
@@ -119,18 +128,21 @@ const getListItemName = (path: string) => {
 			<LazyRunDataJsonActions
 				v-if="!editMode.enabled"
 				:node="node"
+				:pane-type="paneType"
 				:push-ref="pushRef"
-				:display-mode="displayMode"
 				:distance-from-active="distanceFromActive"
 				:selected-json-path="selectedJsonPath"
 				:json-data="jsonData"
-				:pane-type="paneType"
+				:output-index="outputIndex"
+				:run-index="runIndex"
 			/>
 		</Suspense>
 		<Draggable
 			type="mapping"
 			target-data-key="mappable"
 			:disabled="!mappingEnabled"
+			:can-drop="canDraggableDrop"
+			:sticky-position="draggableStickyPosition"
 			@dragstart="onDragStart"
 			@dragend="onDragEnd"
 		>
