@@ -1,12 +1,16 @@
 import { type LlmTokenUsageData, type IAiDataContent } from '@/Interface';
+import { addTokenUsageData, emptyTokenUsageData } from '@/utils/aiUtils';
 import {
-	type IRunData,
 	type INodeExecutionData,
 	type ITaskData,
 	type ITaskDataConnections,
 	type NodeConnectionType,
 	type Workflow,
 } from 'n8n-workflow';
+import { splitTextBySearch } from '@/utils/stringUtils';
+import { escapeHtml } from 'xss';
+import type MarkdownIt from 'markdown-it';
+import { unescapeAll } from 'markdown-it/lib/common/utils';
 
 export interface AIResult {
 	node: string;
@@ -49,7 +53,7 @@ export function getTreeNodeData(
 	nodeName: string,
 	workflow: Workflow,
 	aiData: AIResult[] | undefined,
-	runIndex?: number,
+	runIndex: number,
 ): TreeNode[] {
 	return getTreeNodeDataRec(undefined, nodeName, 0, workflow, aiData, runIndex);
 }
@@ -60,26 +64,37 @@ function getTreeNodeDataRec(
 	currentDepth: number,
 	workflow: Workflow,
 	aiData: AIResult[] | undefined,
-	runIndex: number | undefined,
+	runIndex: number,
 ): TreeNode[] {
 	const connections = workflow.connectionsByDestinationNode[nodeName];
 	const resultData =
-		aiData?.filter(
-			(data) => data.node === nodeName && (runIndex === undefined || runIndex === data.runIndex),
-		) ?? [];
+		aiData?.filter((data) => data.node === nodeName && runIndex === data.runIndex) ?? [];
 
 	if (!connections) {
 		return resultData.map((d) => createNode(parent, nodeName, currentDepth, d.runIndex, d));
 	}
 
+	// Filter AI data to only show executions that were triggered by this node
+	// This prevents duplicate entries in logs when a sub-node is connected to multiple root nodes
+	// Nodes without source info or with empty source arrays are always included
+	const filteredAiData = aiData?.filter(({ data }) => {
+		if (!data?.source || data.source.every((source) => source === null)) {
+			return true;
+		}
+
+		return data.source.some(
+			(source) => source?.previousNode === nodeName && source.previousNodeRun === runIndex,
+		);
+	});
+
 	// Get the first level of children
 	const connectedSubNodes = workflow.getParentNodes(nodeName, 'ALL_NON_MAIN', 1);
 
-	const treeNode = createNode(parent, nodeName, currentDepth, runIndex ?? 0);
+	const treeNode = createNode(parent, nodeName, currentDepth, runIndex);
 
 	// Only include sub-nodes which have data
-	const children = (aiData ?? []).flatMap((data) =>
-		connectedSubNodes.includes(data.node) && (runIndex === undefined || data.runIndex === runIndex)
+	const children = (filteredAiData ?? []).flatMap((data) =>
+		connectedSubNodes.includes(data.node)
 			? getTreeNodeDataRec(treeNode, data.node, currentDepth + 1, workflow, aiData, data.runIndex)
 			: [],
 	);
@@ -144,6 +159,9 @@ export function getReferencedData(
 				data: data[type][0],
 				inOut,
 				type: type as NodeConnectionType,
+				// Include source information in AI content to track which node triggered the execution
+				// This enables filtering in the UI to show only relevant executions
+				source: taskData.source,
 				metadata: {
 					executionTime: taskData.executionTime,
 					startTime: taskData.startTime,
@@ -161,22 +179,6 @@ export function getReferencedData(
 	}
 
 	return returnData;
-}
-
-const emptyTokenUsageData: LlmTokenUsageData = {
-	completionTokens: 0,
-	promptTokens: 0,
-	totalTokens: 0,
-	isEstimate: false,
-};
-
-function addTokenUsageData(one: LlmTokenUsageData, another: LlmTokenUsageData): LlmTokenUsageData {
-	return {
-		completionTokens: one.completionTokens + another.completionTokens,
-		promptTokens: one.promptTokens + another.promptTokens,
-		totalTokens: one.totalTokens + another.totalTokens,
-		isEstimate: one.isEstimate || another.isEstimate,
-	};
 }
 
 export function getConsumedTokens(outputRun: IAiDataContent | undefined): LlmTokenUsageData {
@@ -201,68 +203,51 @@ export function getConsumedTokens(outputRun: IAiDataContent | undefined): LlmTok
 	return tokenUsage;
 }
 
-export function getTotalConsumedTokens(...usage: LlmTokenUsageData[]): LlmTokenUsageData {
-	return usage.reduce(addTokenUsageData, emptyTokenUsageData);
+export function createHtmlFragmentWithSearchHighlight(
+	text: string,
+	search: string | undefined,
+): string {
+	const escaped = escapeHtml(text);
+
+	return search
+		? splitTextBySearch(escaped, search)
+				.map((part) => (part.isMatched ? `<mark>${part.content}</mark>` : part.content))
+				.join('')
+		: escaped;
 }
 
-export function getSubtreeTotalConsumedTokens(treeNode: TreeNode): LlmTokenUsageData {
-	return getTotalConsumedTokens(
-		treeNode.consumedTokens,
-		...treeNode.children.map(getSubtreeTotalConsumedTokens),
-	);
-}
+export function createSearchHighlightPlugin(search: string | undefined) {
+	return (md: MarkdownIt) => {
+		md.renderer.rules.text = (tokens, idx) =>
+			createHtmlFragmentWithSearchHighlight(tokens[idx].content, search);
 
-export function formatTokenUsageCount(
-	usage: LlmTokenUsageData,
-	field: 'total' | 'prompt' | 'completion',
-) {
-	const count =
-		field === 'total'
-			? usage.totalTokens
-			: field === 'completion'
-				? usage.completionTokens
-				: usage.promptTokens;
+		md.renderer.rules.code_inline = (tokens, idx, _, __, slf) =>
+			`<code${slf.renderAttrs(tokens[idx])}>${createHtmlFragmentWithSearchHighlight(tokens[idx].content, search)}</code>`;
 
-	return usage.isEstimate ? `~${count}` : count.toLocaleString();
-}
+		md.renderer.rules.code_block = (tokens, idx, _, __, slf) =>
+			`<pre${slf.renderAttrs(tokens[idx])}><code>${createHtmlFragmentWithSearchHighlight(tokens[idx].content, search)}</code></pre>\n`;
 
-export function createLogEntries(workflow: Workflow, runData: IRunData) {
-	const runs = Object.entries(runData)
-		.filter(([nodeName]) => workflow.getChildNodes(nodeName, 'ALL_NON_MAIN').length === 0)
-		.flatMap(([nodeName, taskData]) =>
-			taskData.map((task, runIndex) => ({ nodeName, task, runIndex })),
-		)
-		.sort((a, b) => {
-			if (a.task.executionIndex !== undefined && b.task.executionIndex !== undefined) {
-				return a.task.executionIndex - b.task.executionIndex;
+		md.renderer.rules.fence = (tokens, idx, options, _, slf) => {
+			const token = tokens[idx];
+			const info = token.info ? unescapeAll(token.info).trim() : '';
+			let langName = '';
+			let langAttrs = '';
+
+			if (info) {
+				const arr = info.split(/(\s+)/g);
+				langName = arr[0];
+				langAttrs = arr.slice(2).join('');
 			}
 
-			return a.nodeName === b.nodeName
-				? a.runIndex - b.runIndex
-				: a.task.startTime - b.task.startTime;
-		});
+			const highlighted =
+				options.highlight?.(token.content, langName, langAttrs) ??
+				createHtmlFragmentWithSearchHighlight(token.content, search);
 
-	return runs.flatMap(({ nodeName, runIndex, task }) => {
-		if (workflow.getParentNodes(nodeName, 'ALL_NON_MAIN').length > 0) {
-			return getTreeNodeData(
-				nodeName,
-				workflow,
-				createAiData(nodeName, workflow, (node) => runData[node] ?? []),
-				undefined,
-			);
-		}
+			if (highlighted.indexOf('<pre') === 0) {
+				return highlighted + '\n';
+			}
 
-		return getTreeNodeData(
-			nodeName,
-			workflow,
-			[
-				{
-					data: getReferencedData(task, false, true)[0],
-					node: nodeName,
-					runIndex,
-				},
-			],
-			runIndex,
-		);
-	});
+			return `<pre><code${slf.renderAttrs(token)}>${highlighted}</code></pre>\n`;
+		};
+	};
 }
